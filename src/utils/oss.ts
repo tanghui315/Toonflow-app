@@ -99,12 +99,21 @@ class OSS {
       ".tiff": "image/tiff",
       ".tif": "image/tiff",
       ".mp4": "video/mp4",
+      ".mov": "video/quicktime",
+      ".webm": "video/webm",
       ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".m4a": "audio/mp4",
+      ".aac": "audio/aac",
+      ".flac": "audio/flac",
+      ".ogg": "audio/ogg",
+      ".aiff": "audio/aiff",
+      ".aif": "audio/aiff",
     };
 
     const mimeType = mimeTypes[ext];
     if (!mimeType) {
-      throw new Error(`不支持的图片格式: ${ext}。支持的格式: ${Object.keys(mimeTypes).join(", ")}`);
+      throw new Error(`不支持的媒体格式: ${ext}。支持的格式: ${Object.keys(mimeTypes).join(", ")}`);
     }
 
     // 读取文件并转换为 base64

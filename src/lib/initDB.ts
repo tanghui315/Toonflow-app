@@ -530,6 +530,12 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.integer("scriptId");
         table.integer("projectId");
         table.integer("videoTrackId");
+        table.text("model");
+        table.text("mode");
+        table.text("resolution");
+        table.integer("audio");
+        table.text("source");
+        table.text("prompt");
         table.primary(["id"]);
         table.unique(["id"]);
       },
@@ -608,6 +614,12 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
           },
           {
             id: "vidu",
+            inputValues: "{}",
+            models: "[]",
+            enable: 0,
+          },
+          {
+            id: "runninghub",
             inputValues: "{}",
             models: "[]",
             enable: 0,

@@ -68,6 +68,12 @@ export default async (knex: Knex): Promise<void> => {
   await addColumn("o_assets", "audioBindState", "integer");
   await addColumn("o_modelPrompt", "fileName", "string");
   await addColumn("o_modelPrompt", "path", "string");
+  await addColumn("o_video", "model", "text");
+  await addColumn("o_video", "mode", "text");
+  await addColumn("o_video", "resolution", "text");
+  await addColumn("o_video", "audio", "integer");
+  await addColumn("o_video", "source", "text");
+  await addColumn("o_video", "prompt", "text");
   const vendorDataSelect = await u.db("o_vendorConfig").whereIn("id", ["deepseek", "atlascloud"]).select("*");
   if (!vendorDataSelect.find((i) => i.id == "deepseek")) {
     await u.db("o_vendorConfig").insert({
@@ -189,6 +195,17 @@ export default async (knex: Knex): Promise<void> => {
   const toonflowVer = await u.vendor.getVendor("toonflow").version;
   if (Number(toonflowVer) < 3.2) {
     u.vendor.writeCode("toonflow", vendorData["toonflow.ts"]);
+  }
+  if (vendorData["runninghub.ts"]) {
+    try {
+      const runninghubVer = await u.vendor.getVendor("runninghub").version;
+      const runninghubVersion = Number(runninghubVer);
+      if (!Number.isFinite(runninghubVersion) || runninghubVersion < 1.1) {
+        u.vendor.writeCode("runninghub", vendorData["runninghub.ts"]);
+      }
+    } catch (e) {
+      u.vendor.writeCode("runninghub", vendorData["runninghub.ts"]);
+    }
   }
 };
 

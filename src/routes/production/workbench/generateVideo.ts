@@ -4,7 +4,7 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import { ReferenceList } from "@/utils/ai";
+import type { ReferenceList } from "@/utils/ai";
 const router = express.Router();
 
 type Type = "imageReference" | "startImage" | "endImage" | "videoReference" | "audioReference";
@@ -61,16 +61,17 @@ export default router.post(
             .db("o_assets")
             .where("o_assets.id", item.id)
             .leftJoin("o_image", "o_assets.imageId", "o_image.id")
-            .select("o_image.filePath", "o_image.type")
+            .select("o_image.filePath", "o_assets.type as assetType", "o_image.type as imageType")
             .first();
-          return { path: filePath?.filePath, sources: filePath.type };
+          const sourceType = filePath?.assetType === "audio" || filePath?.imageType === "audio" ? "audio" : "image";
+          return { path: filePath?.filePath, sources: sourceType };
         }
       }),
     );
     //把images里面的图片转成base64格式
     const base64 = await Promise.all(
       images.map(async (item) => {
-        if (!item) return null;
+        if (!item?.path) return null;
         return { base64: await u.oss.getImageBase64(item.path), type: item.sources == "audio" ? "audio" : "image" };
       }),
     );
@@ -82,6 +83,12 @@ export default router.post(
       scriptId,
       projectId,
       videoTrackId: trackId,
+      model,
+      mode: JSON.stringify(modeData.length > 0 ? modeData : mode),
+      resolution,
+      audio: audio ? 1 : 0,
+      source: "workbench-generate",
+      prompt,
     });
     res.status(200).send(success(videoId));
     const relatedObjects = {

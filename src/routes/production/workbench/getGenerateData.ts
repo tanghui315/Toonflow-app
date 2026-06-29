@@ -179,15 +179,14 @@ export default router.post(
             return true;
           });
 
-          // 有 audioReference 时，按数量截取 audio 类型资产
-          const audioCountMap: Record<string, number> = {};
+          // 只有模型声明 audioReference 时才提供音频引用，并按数量截断。
+          let usedAudioCount = 0;
           const filteredAssets = uniqueAssets.filter((a) => {
-            if (a.fileType !== "audio" || audioReferenceCount === 0) return true;
-            const key = String(a.id);
-            audioCountMap[key] = (audioCountMap[key] ?? 0) + 1;
-            // 统计当前 track 内 audio 总数，超过上限则过滤
-            const totalAudio = Object.values(audioCountMap).reduce((s, n) => s + n, 0);
-            return totalAudio <= audioReferenceCount;
+            if (a.fileType !== "audio") return true;
+            if (audioReferenceCount <= 0) return false;
+            if (usedAudioCount >= audioReferenceCount) return false;
+            usedAudioCount += 1;
+            return true;
           });
 
           const hasImageAssetData = filteredAssets.filter((i) => i.src);
@@ -201,8 +200,15 @@ export default router.post(
             .map(async (v) => ({
               id: v.id!,
               src: v.filePath ? await u.oss.getFileUrl(v.filePath) : "",
-              state: v.state === "已完成" ? "已完成" : v.state === "生成中" ? "生成中" : v.state === "生成失败" ? "生成失败" : "未生成",
+              state: v.state === "已完成" || v.state === "生成成功" ? "已完成" : v.state === "生成中" ? "生成中" : v.state === "生成失败" ? "生成失败" : "未生成",
               errorReason: v?.errorReason ?? "",
+              model: v.model ?? "",
+              mode: v.mode ?? "",
+              resolution: v.resolution ?? "",
+              audio: Boolean(v.audio),
+              source: v.source ?? "",
+              prompt: v.prompt ?? "",
+              label: [v.source, v.model, v.resolution].filter(Boolean).join(" / "),
             })),
         ),
       });

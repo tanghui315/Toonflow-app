@@ -23,7 +23,9 @@ export default router.post(
         await Promise.all(
           videoList.map(async (s) => ({
             ...s,
-            src: s.filePath ? await u.oss.getSmallImageUrl(s.filePath) : "",
+            src: s.filePath ? await u.oss.getFileUrl(s.filePath) : "",
+            state: s.state === "生成成功" ? "已完成" : s.state,
+            label: [s.source, s.model, s.resolution].filter(Boolean).join(" / "),
           })),
         ),
       ),

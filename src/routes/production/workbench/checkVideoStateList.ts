@@ -18,13 +18,15 @@ export default router.post(
       .db("o_video")
       .whereIn("id", videoIds)
       .whereIn("state", ["生成成功", "生成失败"])
-      .select("id", "state", "errorReason", "filePath");
+      .select("id", "state", "errorReason", "filePath", "model", "mode", "resolution", "audio", "source", "prompt");
     res.status(200).send(
       success(
         await Promise.all(
           videoList.map(async (s) => ({
             ...s,
+            state: s.state === "生成成功" ? "已完成" : s.state,
             src: s.filePath ? await u.oss.getFileUrl(s.filePath) : "",
+            label: [s.source, s.model, s.resolution].filter(Boolean).join(" / "),
           })),
         ),
       ),
