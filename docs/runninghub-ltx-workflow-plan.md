@@ -33,12 +33,25 @@ RunningHub Workflow 通道新增一个内置视频模型：
   - `startEndRequired`
   - `["imageReference:9", "audioReference:3", "videoReference:1"]`
 
+并新增一个中文站 Licon-MSR 多参考入口：
+
+- 名称：`LTX-2.3 中文站 Licon-MSR Workflow（4参考图+背景）`
+- 模型名：`ltx-2.3/cn-msr-workflow`
+- 用途：通过用户复制到自己 RunningHub 中文站账号的 `（高帧率）Ltx2.3 Licon-MSR全能参考生视频正式版V1` 工作流，承载角色、场景、道具、分镜图等多图参考一致性。
+- 输入模式：`["imageReference:4", "backgroundImage:1"]`
+- 默认 workflowId：`2064002512151212034`
+- 默认节点映射：`prompt=83.prompt`、`duration=88.value`、`width=87.value`、`height=86.value`、`image1=29.image`、`image2=40.image`、`image3=30.image`、`image4=84.image`、`background=33.image`
+
+该模型和 `ltx-2.3/workflow` 共用同一套 Workflow API 调用逻辑。区别是 MSR 入口是推荐产品化入口，`ltx-2.3/workflow` 保留为高级自定义入口，用于首尾帧、音频参考、视频参考等其他复杂工作流。
+
 供应商配置新增：
 
 - `workflowId`：RunningHub workflow id
 - `workflowNodeMapJson`：Toonflow 输入到工作流节点的映射
 - `workflowInstanceType`：可选实例类型
 - `workflowUsePersonalQueue`：是否走个人队列
+
+`ltx-2.3/cn-msr-workflow` 已内置默认 `workflowId` 和节点映射；以上配置用于覆盖默认值或接入其它自定义工作流。
 
 ## 节点映射格式
 
@@ -57,6 +70,7 @@ RunningHub Workflow 通道新增一个内置视频模型：
     { "nodeId": "30", "fieldName": "image" },
     { "nodeId": "31", "fieldName": "image" }
   ],
+  "backgroundImage": { "nodeId": "32", "fieldName": "image" },
   "audioReferences": [
     { "nodeId": "40", "fieldName": "audio" }
   ],
@@ -73,8 +87,14 @@ RunningHub Workflow 通道新增一个内置视频模型：
 - `endImage` 使用第二张 image reference。
 - `singleImage` 未配置时复用 `startImage`。
 - `referenceImages` 从剩余图片开始填充；如果没有首尾帧，默认从第一张图片开始。
+- `backgroundImage` 使用 `backgroundImage:1` 对应的额外图片，适合 Licon-MSR 的 background 输入。
 - `audioReferences` 和 `videoReferences` 按顺序填充。
 - `static` 用于写死 seed、steps、cfg 等工作流常量。
+- `referenceImageEnables` / `audioReferenceEnables` / `videoReferenceEnables` 按实际引用数量自动写入 `true`。
+- `referenceImageDurations` / `audioReferenceDurations` / `videoReferenceDurations` 按实际引用数量自动写入当前片段时长。
+- `referenceImageStartTimes` / `audioReferenceStartTimes` / `videoReferenceStartTimes` 按实际引用数量自动写入 `0`。
+
+中文站具体接入说明见 `docs/runninghub-cn-ltx23-workflow.md`。
 
 ## 执行流程
 

@@ -4,7 +4,7 @@ type VideoMode =
   | "endFrameOptional"
   | "startFrameOptional"
   | "text"
-  | (`videoReference:${number}` | `imageReference:${number}` | `audioReference:${number}`)[];
+  | (`videoReference:${number}` | `imageReference:${number}` | `audioReference:${number}` | `backgroundImage:${number}`)[];
 
 interface TextModel {
   name: string;
@@ -82,11 +82,11 @@ declare const exports: {
 
 const vendor: VendorConfig = {
   id: "runninghub",
-  version: "1.1",
+  version: "1.5",
   author: "Toonflow",
   name: "RunningHub",
   description:
-    "RunningHub 视频生成接口。当前内置 LTX-2.3 标准文生/图生视频，以及可配置 Workflow 通道，用于首尾帧、多参考图、音频参考等复杂工作流。需要在 RunningHub 获取 API Key。",
+    "RunningHub 视频生成接口。当前内置 LTX-2.3 标准文生/图生视频、中文站 Licon-MSR 多参考 Workflow，以及可配置 Workflow 通道。需要在 RunningHub 获取 API Key。",
   inputs: [
     { key: "apiKey", label: "API Key", type: "password", required: true, placeholder: "RunningHub API Key" },
     { key: "baseUrl", label: "接口地址", type: "url", required: true, placeholder: "https://www.runninghub.ai" },
@@ -96,8 +96,8 @@ const vendor: VendorConfig = {
     { key: "i2vPortraitSelect", label: "I2V 竖屏选项", type: "text", required: true, placeholder: "默认 2，可按后台选项调整" },
     { key: "qualitySelect", label: "质量/FPS选项", type: "text", required: true, placeholder: "官方示例默认 2" },
     { key: "rhCoinGuard", label: "RH币预检", type: "text", required: true, placeholder: "1=提交任务前检查RH币余额" },
-    { key: "workflowId", label: "Workflow ID", type: "text", required: false, placeholder: "RunningHub LTX-2.3 工作流 ID" },
-    { key: "workflowNodeMapJson", label: "Workflow节点映射", type: "text", required: false, placeholder: "{\"prompt\":{\"nodeId\":\"6\",\"fieldName\":\"text\"}}" },
+    { key: "workflowId", label: "Workflow ID", type: "text", required: false, placeholder: "可选；cn-msr-workflow 已内置默认 workflowId" },
+    { key: "workflowNodeMapJson", label: "Workflow节点映射", type: "text", required: false, placeholder: "可选；cn-msr-workflow 已内置默认节点映射" },
     { key: "workflowInstanceType", label: "Workflow实例类型", type: "text", required: false, placeholder: "可选，留空使用RunningHub默认值" },
     { key: "workflowUsePersonalQueue", label: "个人队列", type: "text", required: false, placeholder: "1=使用个人队列，0=默认" },
   ],
@@ -140,9 +140,32 @@ const vendor: VendorConfig = {
       audio: "optional",
       durationResolutionMap: [{ duration: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20], resolution: ["480p", "720p", "1080p"] }],
     },
+    {
+      name: "LTX-2.3 中文站 Licon-MSR Workflow（4参考图+背景）",
+      modelName: "ltx-2.3/cn-msr-workflow",
+      type: "video",
+      mode: [["imageReference:4", "backgroundImage:1"]],
+      audio: false,
+      durationResolutionMap: [{ duration: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20], resolution: ["480p", "720p", "1080p"] }],
+    },
   ],
 };
 exports.vendor = vendor;
+
+const CN_LICON_MSR_WORKFLOW_ID = "2064002512151212034";
+const CN_LICON_MSR_NODE_MAP = {
+  prompt: { nodeId: "83", fieldName: "prompt" },
+  duration: { nodeId: "88", fieldName: "value" },
+  width: { nodeId: "87", fieldName: "value" },
+  height: { nodeId: "86", fieldName: "value" },
+  referenceImages: [
+    { nodeId: "29", fieldName: "image" },
+    { nodeId: "40", fieldName: "image" },
+    { nodeId: "30", fieldName: "image" },
+    { nodeId: "84", fieldName: "image" },
+  ],
+  backgroundImage: { nodeId: "33", fieldName: "image" },
+};
 
 const textRequest = () => {
   throw new Error("RunningHub 渠道当前仅提供视频模型");
@@ -154,8 +177,15 @@ const imageRequest = async () => {
 };
 exports.imageRequest = imageRequest;
 
-function baseUrl() {
-  return (vendor.inputValues.baseUrl || "https://www.runninghub.ai").replace(/\/+$/, "");
+function isCnLiconMsrModel(model?: VideoModel) {
+  return model?.modelName === "ltx-2.3/cn-msr-workflow";
+}
+
+function baseUrl(model?: VideoModel) {
+  const configured = (vendor.inputValues.baseUrl || "").trim();
+  const normalized = (configured || "https://www.runninghub.ai").replace(/\/+$/, "");
+  if (isCnLiconMsrModel(model) && (!configured || normalized === "https://www.runninghub.ai")) return "https://www.runninghub.cn";
+  return normalized;
 }
 
 function apiKey() {
@@ -186,26 +216,52 @@ function responseMessage(data: any, fallback: string) {
   return data?.errorMessage || data?.message || data?.msg || fallback;
 }
 
+function isTransientNetworkError(error: any) {
+  const message = String(error?.message || error || "");
+  const code = String(error?.code || error?.cause?.code || "");
+  const status = Number(error?.response?.status || error?.status);
+  return (
+    (Number.isFinite(status) && status >= 500) ||
+    /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket disconnected|TLS connection|network/i.test(`${code} ${message}`)
+  );
+}
+
+async function withNetworkRetry<T>(fn: () => Promise<T>, maxRetry = 5, waitMs = 1500): Promise<T> {
+  let lastError: any;
+  for (let attempt = 1; attempt <= maxRetry; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientNetworkError(error) || attempt === maxRetry) throw error;
+      await new Promise((resolve) => setTimeout(resolve, waitMs * attempt));
+    }
+  }
+  throw lastError;
+}
+
 function toInteger(value: number, fallback: number, min = 5, max = 20) {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
   return Math.max(min, Math.min(max, Math.round(num)));
 }
 
-async function getAccountStatus() {
-  const response = await axios.post(
-    `${baseUrl()}/uc/openapi/accountStatus`,
-    { apikey: apiKey() },
-    { headers: headers() },
+async function getAccountStatus(model?: VideoModel) {
+  const response = await withNetworkRetry(() =>
+    axios.post(
+      `${baseUrl(model)}/uc/openapi/accountStatus`,
+      { apikey: apiKey() },
+      { headers: headers() },
+    ),
   );
   const data = response.data?.data;
   if (!data) throw new Error(`RunningHub 账号状态查询失败: ${JSON.stringify(response.data)}`);
   return data;
 }
 
-async function ensureRhCoins() {
+async function ensureRhCoins(model?: VideoModel) {
   if (vendor.inputValues.rhCoinGuard === "0") return null;
-  const data = await getAccountStatus();
+  const data = await getAccountStatus(model);
   const coins = Number(data.remainCoins);
   if (!Number.isFinite(coins)) throw new Error(`RunningHub 未返回 RH币余额: ${JSON.stringify(data)}`);
   if (coins <= 0) throw new Error("RunningHub RH币余额不足，已阻止提交视频任务");
@@ -244,7 +300,7 @@ function parseBase64File(dataUrl: string, fallbackMime = "application/octet-stre
   return { buffer: Buffer.from(rawBase64, "base64"), mime, ext };
 }
 
-async function uploadImage(imageBase64: string) {
+async function uploadImage(imageBase64: string, model?: VideoModel) {
   const file = parseBase64File(imageBase64, "image/png");
   const form = new FormData();
   form.append("file", file.buffer, {
@@ -252,13 +308,15 @@ async function uploadImage(imageBase64: string) {
     contentType: file.mime,
   });
 
-  const response = await axios.post(`${baseUrl()}/openapi/v2/media/upload/binary`, form, {
-    headers: {
-      Authorization: `Bearer ${apiKey()}`,
-      ...form.getHeaders(),
-    },
-    maxBodyLength: Infinity,
-  });
+  const response = await withNetworkRetry(() =>
+    axios.post(`${baseUrl(model)}/openapi/v2/media/upload/binary`, form, {
+      headers: {
+        Authorization: `Bearer ${apiKey()}`,
+        ...form.getHeaders(),
+      },
+      maxBodyLength: Infinity,
+    }),
+  );
   if (hasFailureCode(response.data)) {
     throw new Error(responseMessage(response.data, "RunningHub 图片上传失败"));
   }
@@ -267,14 +325,16 @@ async function uploadImage(imageBase64: string) {
   return filename;
 }
 
-function workflowId() {
+function workflowId(model?: VideoModel) {
   const value = (vendor.inputValues.workflowId || "").trim();
+  if (!value && isCnLiconMsrModel(model)) return CN_LICON_MSR_WORKFLOW_ID;
   if (!value) throw new Error("缺少 RunningHub Workflow ID。请先复制 LTX-2.3 工作流并填写 workflowId");
   return value;
 }
 
-function parseNodeMap() {
+function parseNodeMap(model?: VideoModel) {
   const raw = (vendor.inputValues.workflowNodeMapJson || "").trim();
+  if (!raw && isCnLiconMsrModel(model)) return CN_LICON_MSR_NODE_MAP;
   if (!raw) throw new Error("缺少 RunningHub Workflow 节点映射 JSON。请从 Workflow API JSON 中配置 nodeId/fieldName");
   try {
     return JSON.parse(raw);
@@ -308,6 +368,30 @@ function appendNodeSequence(nodeInfoList: any[], mappings: any, values: any[]) {
   }
 }
 
+function appendNodeSequenceValue(nodeInfoList: any[], mappings: any, count: number, value: any) {
+  const mapList = asArray(mappings);
+  for (let i = 0; i < mapList.length && i < count; i++) {
+    appendNode(nodeInfoList, mapList[i], value);
+  }
+}
+
+function referenceLimit(mode: any, prefix: "imageReference" | "audioReference" | "videoReference" | "backgroundImage"): number | undefined {
+  for (const item of asArray(mode)) {
+    if (Array.isArray(item)) {
+      const nested = referenceLimit(item, prefix);
+      if (nested !== undefined) return nested;
+    } else if (typeof item === "string" && item.startsWith(`${prefix}:`)) {
+      const limit = Number(item.split(":")[1]);
+      if (Number.isFinite(limit) && limit > 0) return Math.floor(limit);
+    }
+  }
+  return undefined;
+}
+
+function limitList<T>(items: T[], maxCount?: number): T[] {
+  return maxCount === undefined ? items : items.slice(0, maxCount);
+}
+
 function dimensions(aspectRatio: string, resolution: string) {
   const longSide = /1080/i.test(resolution) ? 1920 : /480/i.test(resolution) ? 854 : 1280;
   const shortSide = /1080/i.test(resolution) ? 1080 : /480/i.test(resolution) ? 480 : 720;
@@ -329,7 +413,7 @@ function shouldReserveStart(config: VideoConfig) {
   return mode === "singleImage" || mode === "startFrameOptional" || mode === "startEndRequired" || mode === "endFrameOptional";
 }
 
-async function uploadWorkflowFile(ref: ReferenceList) {
+async function uploadWorkflowFile(ref: ReferenceList, model?: VideoModel) {
   const fallbackMimeMap: Record<string, string> = { image: "image/png", audio: "audio/wav", video: "video/mp4" };
   const file = parseBase64File(ref.base64, fallbackMimeMap[ref.type]);
   const form = new FormData();
@@ -338,13 +422,15 @@ async function uploadWorkflowFile(ref: ReferenceList) {
     contentType: file.mime,
   });
 
-  const response = await axios.post(`${baseUrl()}/openapi/v2/media/upload/binary`, form, {
-    headers: {
-      Authorization: `Bearer ${apiKey()}`,
-      ...form.getHeaders(),
-    },
-    maxBodyLength: Infinity,
-  });
+  const response = await withNetworkRetry(() =>
+    axios.post(`${baseUrl(model)}/openapi/v2/media/upload/binary`, form, {
+      headers: {
+        Authorization: `Bearer ${apiKey()}`,
+        ...form.getHeaders(),
+      },
+      maxBodyLength: Infinity,
+    }),
+  );
   if (hasFailureCode(response.data)) {
     throw new Error(responseMessage(response.data, `RunningHub ${ref.type}上传失败`));
   }
@@ -354,18 +440,44 @@ async function uploadWorkflowFile(ref: ReferenceList) {
   return filename;
 }
 
-async function buildWorkflowNodeInfoList(config: VideoConfig) {
-  const map = parseNodeMap();
+async function buildWorkflowNodeInfoList(config: VideoConfig, model?: VideoModel) {
+  const map = parseNodeMap(model);
   const nodeInfoList: any[] = [];
   const size = dimensions(config.aspectRatio, config.resolution || "720p");
   const duration = toInteger(config.duration, 5, 1, 60);
-  const images = (config.referenceList || []).filter((ref) => ref.type === "image") as Extract<ReferenceList, { type: "image" }>[];
-  const audios = (config.referenceList || []).filter((ref) => ref.type === "audio") as Extract<ReferenceList, { type: "audio" }>[];
-  const videos = (config.referenceList || []).filter((ref) => ref.type === "video") as Extract<ReferenceList, { type: "video" }>[];
+  const mode = activeMode(config);
+  const imageRefOffset = Array.isArray(mode) ? 0 : shouldReserveStartEnd(config) ? 2 : shouldReserveStart(config) ? 1 : 0;
+  const imageReferenceLimit = referenceLimit(mode, "imageReference");
+  const backgroundImageLimit = referenceLimit(mode, "backgroundImage");
+  const audioReferenceLimit = referenceLimit(mode, "audioReference");
+  const videoReferenceLimit = referenceLimit(mode, "videoReference");
+  const isReferenceMode = Array.isArray(mode);
+  const subjectImageLimit = imageReferenceLimit ?? 0;
+  const imageUploadLimit =
+    imageReferenceLimit === undefined && backgroundImageLimit === undefined
+      ? isReferenceMode
+        ? imageRefOffset
+        : undefined
+      : imageRefOffset + subjectImageLimit + (backgroundImageLimit ?? 0);
+  const audioUploadLimit = audioReferenceLimit === undefined ? (isReferenceMode ? 0 : undefined) : audioReferenceLimit;
+  const videoUploadLimit = videoReferenceLimit === undefined ? (isReferenceMode ? 0 : undefined) : videoReferenceLimit;
+  const images = limitList(
+    (config.referenceList || []).filter((ref) => ref.type === "image") as Extract<ReferenceList, { type: "image" }>[],
+    imageUploadLimit,
+  );
+  const audios = limitList(
+    (config.referenceList || []).filter((ref) => ref.type === "audio") as Extract<ReferenceList, { type: "audio" }>[],
+    audioUploadLimit,
+  );
+  const videos = limitList(
+    (config.referenceList || []).filter((ref) => ref.type === "video") as Extract<ReferenceList, { type: "video" }>[],
+    videoUploadLimit,
+  );
+  if (imageReferenceLimit !== undefined && images.length <= imageRefOffset) throw new Error("Workflow 多参考模式需要至少一张参考图");
   const [imageFiles, audioFiles, videoFiles] = await Promise.all([
-    Promise.all(images.map((ref) => uploadWorkflowFile(ref))),
-    Promise.all(audios.map((ref) => uploadWorkflowFile(ref))),
-    Promise.all(videos.map((ref) => uploadWorkflowFile(ref))),
+    Promise.all(images.map((ref) => uploadWorkflowFile(ref, model))),
+    Promise.all(audios.map((ref) => uploadWorkflowFile(ref, model))),
+    Promise.all(videos.map((ref) => uploadWorkflowFile(ref, model))),
   ]);
 
   appendNode(nodeInfoList, map.prompt, config.prompt || "");
@@ -380,7 +492,6 @@ async function buildWorkflowNodeInfoList(config: VideoConfig) {
     for (const item of asArray(map.static)) appendNode(nodeInfoList, item);
   }
 
-  const mode = activeMode(config);
   if (mode === "singleImage") {
     if (!imageFiles[0]) throw new Error("Workflow 单图模式需要一张参考图");
     appendNode(nodeInfoList, map.singleImage || map.startImage, imageFiles[0]);
@@ -395,14 +506,22 @@ async function buildWorkflowNodeInfoList(config: VideoConfig) {
     if (imageFiles[1]) appendNode(nodeInfoList, map.endImage, imageFiles[1]);
   }
 
-  let imageRefOffset = 0;
-  if (Array.isArray(mode)) imageRefOffset = 0;
-  else if (shouldReserveStartEnd(config)) imageRefOffset = 2;
-  else if (shouldReserveStart(config)) imageRefOffset = 1;
-
-  appendNodeSequence(nodeInfoList, map.referenceImages || map.images, imageFiles.slice(imageRefOffset));
+  const referenceImageFiles = imageReferenceLimit === undefined ? imageFiles.slice(imageRefOffset) : imageFiles.slice(imageRefOffset, imageRefOffset + imageReferenceLimit);
+  const backgroundImageFile = backgroundImageLimit === undefined ? undefined : imageFiles[imageRefOffset + subjectImageLimit] || referenceImageFiles[referenceImageFiles.length - 1];
+  appendNodeSequence(nodeInfoList, map.referenceImages || map.images, referenceImageFiles);
+  appendNode(nodeInfoList, map.backgroundImage || map.background, backgroundImageFile);
   appendNodeSequence(nodeInfoList, map.audioReferences || map.audios, audioFiles);
   appendNodeSequence(nodeInfoList, map.videoReferences || map.videos, videoFiles);
+  const referenceImageCount = referenceImageFiles.length;
+  appendNodeSequenceValue(nodeInfoList, map.referenceImageEnables || map.imageEnables, referenceImageCount, true);
+  appendNodeSequenceValue(nodeInfoList, map.referenceImageDurations || map.imageDurations, referenceImageCount, duration);
+  appendNodeSequenceValue(nodeInfoList, map.referenceImageStartTimes || map.imageStartTimes, referenceImageCount, 0);
+  appendNodeSequenceValue(nodeInfoList, map.audioReferenceEnables || map.audioEnables, audioFiles.length, true);
+  appendNodeSequenceValue(nodeInfoList, map.audioReferenceDurations || map.audioDurations, audioFiles.length, duration);
+  appendNodeSequenceValue(nodeInfoList, map.audioReferenceStartTimes || map.audioStartTimes, audioFiles.length, 0);
+  appendNodeSequenceValue(nodeInfoList, map.videoReferenceEnables || map.videoEnables, videoFiles.length, true);
+  appendNodeSequenceValue(nodeInfoList, map.videoReferenceDurations || map.videoDurations, videoFiles.length, duration);
+  appendNodeSequenceValue(nodeInfoList, map.videoReferenceStartTimes || map.videoStartTimes, videoFiles.length, 0);
 
   if (nodeInfoList.length === 0) throw new Error("Workflow 节点映射没有生成任何 nodeInfoList，请检查 workflowNodeMapJson");
   logger({ runninghubWorkflowNodes: nodeInfoList.map((item) => `${item.nodeId}.${item.fieldName}`) });
@@ -417,10 +536,10 @@ function outputUrl(data: any) {
   return result?.url || result?.download_url || result?.fileUrl;
 }
 
-async function pollVideo(taskId: string) {
+async function pollVideo(taskId: string, model?: VideoModel) {
   const result = await pollTask(
     async () => {
-      const response = await axios.post(`${baseUrl()}/openapi/v2/query`, { taskId }, { headers: headers() });
+      const response = await axios.post(`${baseUrl(model)}/openapi/v2/query`, { taskId }, { headers: headers() });
       const data = response.data || {};
       const status = String(data.status || data.data?.status || "").toUpperCase();
       const url = outputUrl(data);
@@ -441,20 +560,20 @@ async function pollVideo(taskId: string) {
   return result.data;
 }
 
-async function createTask(endpoint: string, body: Record<string, any>) {
-  const beforeCoins = await ensureRhCoins();
+async function createTask(endpoint: string, body: Record<string, any>, model?: VideoModel) {
+  const beforeCoins = await ensureRhCoins(model);
   logger({ runninghubEndpoint: endpoint, bodyKeys: Object.keys(body) });
-  const response = await axios.post(`${baseUrl()}${endpoint}`, body, { headers: headers() });
+  const response = await axios.post(`${baseUrl(model)}${endpoint}`, body, { headers: headers() });
   const data = response.data || {};
   if (hasFailureCode(data)) {
     throw new Error(responseMessage(data, `RunningHub 提交失败: ${JSON.stringify(data)}`));
   }
   const taskId = data.taskId || data.data?.taskId;
   if (!taskId) throw new Error(`RunningHub 提交后未返回 taskId: ${JSON.stringify(data)}`);
-  const url = await pollVideo(taskId);
+  const url = await pollVideo(taskId, model);
   if (beforeCoins !== null) {
     try {
-      const afterStatus = await getAccountStatus();
+      const afterStatus = await getAccountStatus(model);
       const afterCoins = Number(afterStatus.remainCoins);
       if (Number.isFinite(afterCoins)) {
         logger({ runninghubBilling: { beforeCoins, afterCoins, consumedCoins: beforeCoins - afterCoins } });
@@ -497,15 +616,17 @@ function findVideoUrl(value: any): string | null {
   return null;
 }
 
-async function readWorkflowOutputs(taskId: string) {
-  const response = await axios.post(`${baseUrl()}/task/openapi/outputs`, { apiKey: apiKey(), taskId }, { headers: headers() });
+async function readWorkflowOutputs(taskId: string, model?: VideoModel) {
+  const response = await withNetworkRetry(() =>
+    axios.post(`${baseUrl(model)}/task/openapi/outputs`, { apiKey: apiKey(), taskId }, { headers: headers() }),
+  );
   return response.data || {};
 }
 
-async function pollWorkflowTask(taskId: string) {
+async function pollWorkflowTask(taskId: string, model?: VideoModel) {
   const result = await pollTask(
     async () => {
-      const data = await readWorkflowOutputs(taskId);
+      const data = await readWorkflowOutputs(taskId, model);
       const status = data.taskStatus || data.status || data.data?.taskStatus || data.data?.status;
       const url = findVideoUrl(data);
       if (url) return { completed: true, data: url };
@@ -529,30 +650,30 @@ async function pollWorkflowTask(taskId: string) {
   return result.data;
 }
 
-async function createWorkflowTask(config: VideoConfig) {
-  const beforeCoins = await ensureRhCoins();
-  const nodeInfoList = await buildWorkflowNodeInfoList(config);
+async function createWorkflowTask(config: VideoConfig, model: VideoModel) {
+  const beforeCoins = await ensureRhCoins(model);
+  const nodeInfoList = await buildWorkflowNodeInfoList(config, model);
   const body: Record<string, any> = {
     apiKey: apiKey(),
-    workflowId: workflowId(),
+    workflowId: workflowId(model),
     nodeInfoList,
   };
   if (vendor.inputValues.workflowInstanceType) body.instanceType = vendor.inputValues.workflowInstanceType;
   if (vendor.inputValues.workflowUsePersonalQueue === "1") body.usePersonalQueue = true;
 
   logger({ runninghubWorkflow: { workflowId: body.workflowId, nodeCount: nodeInfoList.length } });
-  const response = await axios.post(`${baseUrl()}/task/openapi/create`, body, { headers: headers() });
+  const response = await withNetworkRetry(() => axios.post(`${baseUrl(model)}/task/openapi/create`, body, { headers: headers() }));
   const data = response.data || {};
   if (hasFailureCode(data)) {
     throw new Error(responseMessage(data, `RunningHub Workflow 提交失败: ${JSON.stringify(data)}`));
   }
   const taskId = data.taskId || data.data?.taskId || data.data;
   if (!taskId) throw new Error(`RunningHub Workflow 提交后未返回 taskId: ${JSON.stringify(data)}`);
-  const url = await pollWorkflowTask(String(taskId));
+  const url = await pollWorkflowTask(String(taskId), model);
 
   if (beforeCoins !== null) {
     try {
-      const afterStatus = await getAccountStatus();
+      const afterStatus = await getAccountStatus(model);
       const afterCoins = Number(afterStatus.remainCoins);
       if (Number.isFinite(afterCoins)) {
         logger({ runninghubWorkflowBilling: { beforeCoins, afterCoins, consumedCoins: beforeCoins - afterCoins } });
@@ -569,21 +690,21 @@ const videoRequest = async (config: VideoConfig, model: VideoModel): Promise<str
   const prompt = config.prompt || "";
   const qualitySelect = vendor.inputValues.qualitySelect || "2";
 
-  if (model.modelName === "ltx-2.3/workflow") {
-    return createWorkflowTask(config);
+  if (model.modelName === "ltx-2.3/workflow" || model.modelName.endsWith("-workflow")) {
+    return createWorkflowTask(config, model);
   }
 
   if (model.modelName === "ltx-2.3/image-to-video") {
     const image = firstImage(config);
     if (!image?.base64) throw new Error("LTX-2.3 图生视频需要一张参考图");
-    const filename = await uploadImage(image.base64);
+    const filename = await uploadImage(image.base64, model);
     return createTask("/openapi/v2/rhart-video/ltx-2.3/image-to-video", {
       "98##image": filename,
       "200##prompt": prompt,
       "245##select": config.aspectRatio === "9:16" ? vendor.inputValues.i2vPortraitSelect : vendor.inputValues.i2vLandscapeSelect,
       "240##select": qualitySelect,
       "222##value": duration,
-    });
+    }, model);
   }
 
   return createTask("/openapi/v2/rhart-video/ltx-2.3/text-to-video", {
@@ -591,6 +712,6 @@ const videoRequest = async (config: VideoConfig, model: VideoModel): Promise<str
     "247##select": config.aspectRatio === "9:16" ? vendor.inputValues.t2vPortraitSelect : vendor.inputValues.t2vLandscapeSelect,
     "248##select": qualitySelect,
     "227##value": duration,
-  });
+  }, model);
 };
 exports.videoRequest = videoRequest;

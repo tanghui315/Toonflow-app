@@ -27,13 +27,25 @@ function isReferenceMode(mode: string | string[]) {
   return Array.isArray(normalized);
 }
 
-function audioReferenceCount(mode: string | string[]) {
+function referenceCount(mode: string | string[], prefix: "imageReference" | "audioReference" | "backgroundImage") {
   const normalized = normalizeMode(mode);
   if (!Array.isArray(normalized)) return 0;
-  const item = normalized.find((value) => value.toLowerCase().startsWith("audioreference:"));
+  const item = normalized.find((value) => value.toLowerCase().startsWith(`${prefix.toLowerCase()}:`));
   if (!item) return 0;
   const num = Number(item.split(":")[1]);
   return Number.isFinite(num) ? num : 0;
+}
+
+function audioReferenceCount(mode: string | string[]) {
+  return referenceCount(mode, "audioReference");
+}
+
+function imageReferenceCount(mode: string | string[]) {
+  return referenceCount(mode, "imageReference");
+}
+
+function backgroundImageCount(mode: string | string[]) {
+  return referenceCount(mode, "backgroundImage");
 }
 
 async function loadModelPrompt(model: string, mode: string | string[]) {
@@ -41,8 +53,8 @@ async function loadModelPrompt(model: string, mode: string | string[]) {
   const videoPrompt = await u.db("o_prompt").where("type", "videoPromptGeneration").first();
   let videoPromptGeneration = "" as string | undefined;
 
-  const modelPromptData = await u.db("o_modelPrompt").where("vendorId", vendorId).where("model", modelData).first();
-  if (modelPromptData) {
+  const modelPromptData = await u.db("o_modelPrompt").where("vendorId", vendorId || "").where("model", modelData || "").first();
+  if (modelPromptData?.path) {
     const modelPromptRoot = u.getPath(["modelPrompt"]);
     try {
       videoPromptGeneration = await fs.readFile(path.join(modelPromptRoot, modelPromptData.path), "utf-8");
@@ -85,18 +97,20 @@ async function buildTrackUploadData(projectId: number, scriptId: number, trackId
     .where({ projectId, scriptId, trackId })
     .orderBy("index", "asc")
     .select("id", "filePath");
-  const storyboardRefs: UploadDataItem[] = storyboardRows.filter((row) => row.filePath).map((row) => ({ id: row.id, sources: "storyboard" }));
+  const storyboardRefs: UploadDataItem[] = storyboardRows
+    .filter((row) => row.filePath && Number.isFinite(row.id))
+    .map((row) => ({ id: row.id as number, sources: "storyboard" }));
 
   if (!isReferenceMode(mode)) return storyboardRefs;
 
-  const storyIds = storyboardRows.map((row) => row.id);
+  const storyIds = storyboardRows.map((row) => row.id).filter((id): id is number => Number.isFinite(id));
   const assetRows = storyIds.length
     ? await u
         .db("o_assets2Storyboard")
         .leftJoin("o_assets", "o_assets2Storyboard.assetId", "o_assets.id")
         .leftJoin("o_image", "o_assets.imageId", "o_image.id")
         .whereIn("o_assets2Storyboard.storyboardId", storyIds)
-        .orderBy("rowid")
+        .orderBy("o_assets2Storyboard.rowid")
         .select("o_assets.id", "o_assets.assetsId", "o_image.filePath")
     : [];
 
@@ -111,6 +125,8 @@ async function buildTrackUploadData(projectId: number, scriptId: number, trackId
     if (asset.assetsId) queryAudioIds.push(asset.assetsId);
   }
 
+  const imageAssetRefs = [...assetRefs];
+  const audioRefs: UploadDataItem[] = [];
   const audioLimit = audioReferenceCount(mode);
   if (audioLimit > 0 && queryAudioIds.length) {
     const audioRows = await u
@@ -124,12 +140,19 @@ async function buildTrackUploadData(projectId: number, scriptId: number, trackId
       if (usedAudioCount >= audioLimit) break;
       if (!audio.id || !audio.filePath || seen.has(audio.id)) continue;
       seen.add(audio.id);
-      assetRefs.push({ id: audio.id, sources: "assets" });
+      audioRefs.push({ id: audio.id, sources: "assets" });
       usedAudioCount += 1;
     }
   }
 
-  return [...assetRefs, ...storyboardRefs];
+  if (backgroundImageCount(mode) > 0) {
+    const imageLimit = imageReferenceCount(mode);
+    const leadingAssets = imageLimit > 0 ? imageAssetRefs.slice(0, imageLimit) : imageAssetRefs;
+    const trailingAssets = imageLimit > 0 ? imageAssetRefs.slice(imageLimit) : [];
+    return [...leadingAssets, ...storyboardRefs, ...trailingAssets, ...audioRefs];
+  }
+
+  return [...imageAssetRefs, ...storyboardRefs, ...audioRefs];
 }
 
 async function buildPromptForTrack(projectId: number, trackId: number, uploadData: UploadDataItem[], model: string, mode: string | string[]) {

@@ -285,13 +285,15 @@ export async function buildPromptPackage(options: BuildOptions): Promise<BuiltPr
   }
 
   for (const storyboard of storyboards) {
-    const references = includeReferences ? storyboardReferenceMap[storyboard.id] || [] : [];
+    const storyboardId = Number(storyboard.id);
+    if (!Number.isFinite(storyboardId)) continue;
+    const references = includeReferences ? storyboardReferenceMap[storyboardId] || [] : [];
     for (const ref of references) referenceFilesByPackagePath.set(ref.file, ref);
-    const promptFile = promptPath({ kind: "storyboard", id: storyboard.id });
-    const suggestedOutput = outputPath({ kind: "storyboard", id: storyboard.id });
+    const promptFile = promptPath({ kind: "storyboard", id: storyboardId });
+    const suggestedOutput = outputPath({ kind: "storyboard", id: storyboardId });
     items.push({
       kind: "storyboard",
-      id: storyboard.id,
+      id: storyboardId,
       promptFile,
       suggestedOutput,
       size: project.imageQuality || "2K",

@@ -1,4 +1,4 @@
-// @db-hash f5d050145d03a52b5b502043bc559ec0
+// @db-hash 0beaf003edd13c6fbae46540cd49e512
 //该文件由脚本自动生成，请勿手动修改
 
 export interface memories {
@@ -97,7 +97,6 @@ export interface o_modelPrompt {
   'id'?: number;
   'model'?: string | null;
   'path'?: string | null;
-  'prompt'?: string | null;
   'vendorId'?: string | null;
 }
 export interface o_novel {
@@ -208,11 +207,17 @@ export interface o_vendorConfig {
   'models'?: string | null;
 }
 export interface o_video {
+  'audio'?: number | null;
   'errorReason'?: string | null;
   'filePath'?: string | null;
   'id'?: number;
+  'mode'?: string | null;
+  'model'?: string | null;
   'projectId'?: number | null;
+  'prompt'?: string | null;
+  'resolution'?: string | null;
   'scriptId'?: number | null;
+  'source'?: string | null;
   'state'?: string | null;
   'time'?: number | null;
   'videoTrackId'?: number | null;
